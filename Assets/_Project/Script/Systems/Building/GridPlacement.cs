@@ -1,23 +1,25 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using System.Collections.Generic;
 
 public class GridPlacement : MonoBehaviour
 {
     [Header("Settings")]
     public float cellSize = 1.0f;
     public LayerMask groundLayer;
-    public LayerMask obstacleLayer; // Layer for existing buildings
+    public LayerMask obstacleLayer;
 
-    [Header("Prefabs")]
-    public GameObject buildingPrefab; // The actual building to be placed
-    public GameObject previewPrefab;  // The transparent preview model
+    [Header("Prefabs & Selection")]
+    public GameObject[] buildingPrefabs; // Array to store different types (0: Runway, 1: Terminal, etc.)
+    public int selectedIndex = 0;
+    public GameObject previewPrefab;
     
     private GameObject _previewInstance;
     private MeshRenderer _previewRenderer;
     
-    [Header("Validation Colors")]
-    public Color validColor = new Color(0, 1, 0, 0.5f);   // Green
-    public Color invalidColor = new Color(1, 0, 0, 0.5f); // Red
+    [Header("Validation & Feedback")]
+    public Color validColor = new Color(0, 1, 0, 0.5f);
+    public Color invalidColor = new Color(1, 0, 0, 0.5f);
     private bool _isPlacementLegal = true;
 
     [Header("Drag-to-Build")]
@@ -29,7 +31,6 @@ public class GridPlacement : MonoBehaviour
         if (previewPrefab != null)
         {
             _previewInstance = Instantiate(previewPrefab);
-            // Assuming the renderer is on the object or its children
             _previewRenderer = _previewInstance.GetComponentInChildren<MeshRenderer>();
         }
     }
@@ -40,49 +41,42 @@ public class GridPlacement : MonoBehaviour
         Ray ray = Camera.main.ScreenPointToRay(mousePos);
         RaycastHit hit;
 
+        // 1. Handle Deletion (Right Click)
+        if (Mouse.current.rightButton.wasPressedThisFrame)
+        {
+            HandleDeletion(ray);
+        }
+
+        // 2. Handle Placement Logic
         if (Physics.Raycast(ray, out hit, 1000f, groundLayer))
         {
             Vector3 currentGridPos = SnapToGrid(hit.point);
 
-            // 1. Handle Input for Dragging
             if (Mouse.current.leftButton.wasPressedThisFrame)
             {
                 _isDragging = true;
                 _dragStartPosition = currentGridPos;
             }
 
-            // 2. Update Preview (Single or Stretched)
             if (_isDragging)
-            {
                 UpdateStretchedPreview(currentGridPos);
-            }
             else
-            {
                 UpdateSinglePreview(currentGridPos);
-            }
 
-            // 3. Substantial Construction (Placement)
             if (Mouse.current.leftButton.wasReleasedThisFrame)
             {
-                if (_isPlacementLegal)
-                {
-                    PlaceBuilding();
-                }
+                if (_isPlacementLegal) PlaceRepeatingBuildings(currentGridPos);
                 ResetDrag();
             }
         }
-    }
-
-    void UpdateSinglePreview(Vector3 pos)
-    {
-        _previewInstance.transform.position = pos;
-        _previewInstance.transform.localScale = Vector3.one;
-        ValidatePosition(pos, Vector3.one);
+        
+        // Quick Toggle Selection (Alpha 1, 2, 3...)
+        if (Keyboard.current.digit1Key.wasPressedThisFrame) selectedIndex = 0;
+        if (Keyboard.current.digit2Key.wasPressedThisFrame) selectedIndex = 1;
     }
 
     void UpdateStretchedPreview(Vector3 currentPos)
     {
-        // Calculate center and scale for runways/fences
         Vector3 center = (_dragStartPosition + currentPos) / 2f;
         Vector3 scale = new Vector3(
             Mathf.Abs(currentPos.x - _dragStartPosition.x) + cellSize,
@@ -93,29 +87,59 @@ public class GridPlacement : MonoBehaviour
         _previewInstance.transform.position = center;
         _previewInstance.transform.localScale = scale;
         
-        ValidatePosition(center, scale);
+        _isPlacementLegal = !Physics.CheckBox(center, (scale * 0.95f) / 2f, Quaternion.identity, obstacleLayer);
+        UpdatePreviewColor();
     }
 
-    void ValidatePosition(Vector3 center, Vector3 scale)
+    // New logic: Instantiate individual units instead of scaling a single mesh
+    void PlaceRepeatingBuildings(Vector3 endPos)
     {
-        // Physics check for overlapping obstacles
-        _isPlacementLegal = !Physics.CheckBox(center, (scale * 0.95f) / 2f, Quaternion.identity, obstacleLayer);
+        Vector3 start = _dragStartPosition;
+        Vector3 end = endPos;
 
-        // Dynamic Shader Feedback
-        if (_previewRenderer != null)
+        // Calculate how many units to place along X and Z
+        int countX = Mathf.Abs(Mathf.RoundToInt((end.x - start.x) / cellSize));
+        int countZ = Mathf.Abs(Mathf.RoundToInt((end.z - start.z) / cellSize));
+
+        float dirX = end.x >= start.x ? 1 : -1;
+        float dirZ = end.z >= start.z ? 1 : -1;
+
+        for (int i = 0; i <= countX; i++)
         {
-            _previewRenderer.material.SetColor("_BaseColor", _isPlacementLegal ? validColor : invalidColor);
+            for (int j = 0; j <= countZ; j++)
+            {
+                Vector3 spawnPos = start + new Vector3(i * cellSize * dirX, 0, j * cellSize * dirZ);
+                // Check once more to avoid overlapping self
+                if (!Physics.CheckSphere(spawnPos, cellSize * 0.3f, obstacleLayer))
+                {
+                    GameObject go = Instantiate(buildingPrefabs[selectedIndex], spawnPos, Quaternion.identity);
+                    go.layer = Mathf.Internal_ClosestLayerIndex(obstacleLayer.value);
+                }
+            }
         }
     }
 
-    void PlaceBuilding()
+    void HandleDeletion(Ray ray)
     {
-        // Instantiate the substantial building based on preview's transform
-        GameObject finalBuilding = Instantiate(buildingPrefab, _previewInstance.transform.position, Quaternion.identity);
-        finalBuilding.transform.localScale = _previewInstance.transform.localScale;
-        
-        // Ensure the new building is on the Obstacle layer
-        finalBuilding.layer = (int)Mathf.Log(obstacleLayer.value, 2);
+        RaycastHit hit;
+        if (Physics.Raycast(ray, out hit, 1000f, obstacleLayer))
+        {
+            Destroy(hit.collider.gameObject);
+        }
+    }
+
+    void UpdateSinglePreview(Vector3 pos)
+    {
+        _previewInstance.transform.position = pos;
+        _previewInstance.transform.localScale = Vector3.one;
+        _isPlacementLegal = !Physics.CheckSphere(pos, cellSize * 0.3f, obstacleLayer);
+        UpdatePreviewColor();
+    }
+
+    void UpdatePreviewColor()
+    {
+        if (_previewRenderer != null)
+            _previewRenderer.material.SetColor("_BaseColor", _isPlacementLegal ? validColor : invalidColor);
     }
 
     void ResetDrag()
