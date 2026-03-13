@@ -37,7 +37,8 @@ public class CameraMovementNewInput : MonoBehaviour
     private bool isOrbiting = false;
     private Vector3 lockedFocusPoint;
     
-    // 【修改】移除了 moveVelocitySmoothing (SmoothDamp 专用变量，已不再需要)
+    // SmoothDamp vector (obsolete, replaced by Lerp)
+    // private Vector3 moveVelocitySmoothing;
     private Vector3 currentMoveDir = Vector3.zero; 
 
     private void Awake()
@@ -105,7 +106,7 @@ public class CameraMovementNewInput : MonoBehaviour
         ApplyBounds();
     }
 
-    // --- 【修改】修复了回抽问题的移动逻辑 ---
+    // Handle movement logically with linear interpolation
     void HandleMovement()
     {
         // 1. 读取输入
@@ -121,8 +122,7 @@ public class CameraMovementNewInput : MonoBehaviour
         Vector3 targetMoveDir = (forward.normalized * inputRaw.y + right.normalized * inputRaw.x);
         targetMoveDir += Vector3.up * vInputRaw;
 
-        // 3. 【核心修复】改用 Lerp (线性插值) 替代 SmoothDamp
-        // SmoothDamp 像弹簧，会回弹；Lerp 像摩擦力滑行，绝不回弹。
+        // 3. Use Lerp for sliding friction feel.
         
         // 计算插值速度：moveSmoothing 越小，Lerp 越快 (越灵敏)
         // 使用 Time.deltaTime 保证帧率无关
