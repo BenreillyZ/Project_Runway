@@ -14,9 +14,7 @@ public class GridPlacement : MonoBehaviour
     public BuildingData[] availableBuildings; 
     public int selectedIndex = 0;
     
-    [Header("Economy & UI")]
-    public int currentMoney = 10000;
-    public TextMeshProUGUI moneyText;
+    [Header("UI")]
     public GameObject tooltipUI;
     public TextMeshProUGUI tooltipText;
 
@@ -31,28 +29,37 @@ public class GridPlacement : MonoBehaviour
     private bool _isPlacementLegal = true;
     private Vector3 _dragStartPosition;
     private bool _isDragging = false;
+    private Camera _mainCamera;
 
     void Start()
     {
+        _mainCamera = Camera.main;
         if (previewPrefab != null)
         {
             _previewInstance = Instantiate(previewPrefab);
             _previewRenderer = _previewInstance.GetComponentInChildren<MeshRenderer>();
         }
-        UpdateMoneyUI();
     }
 
     void Update()
     {
         Vector2 mousePos = Mouse.current.position.ReadValue();
-        Ray ray = Camera.main.ScreenPointToRay(mousePos);
+        Ray ray = _mainCamera.ScreenPointToRay(mousePos);
         RaycastHit hit;
 
-        // 1. Tooltip and Deletion logic
-        HandleContextualUI(ray, mousePos);
-
-        if (Mouse.current.rightButton.wasPressedThisFrame)
-            HandleDeletion(ray);
+        // 1. Tooltip and Deletion logic optimized to one raycast
+        if (Physics.Raycast(ray, out RaycastHit obstacleHit, 1000f, obstacleLayer))
+        {
+            HandleContextualUI(true, obstacleHit.collider.gameObject.name, mousePos);
+            if (Mouse.current.rightButton.wasPressedThisFrame)
+            {
+                HandleDeletion(obstacleHit);
+            }
+        }
+        else
+        {
+            HandleContextualUI(false, "", mousePos);
+        }
 
         // 2. Placement Logic
         if (Physics.Raycast(ray, out hit, 1000f, groundLayer))
@@ -94,12 +101,24 @@ public class GridPlacement : MonoBehaviour
         int countZ = Mathf.Abs(Mathf.RoundToInt((endPos.z - _dragStartPosition.z) / cellSize)) + 1;
         int totalRequired = countX * countZ * data.cost;
 
-        if (currentMoney >= totalRequired && _isPlacementLegal)
+        if (_isPlacementLegal)
         {
-            currentMoney -= totalRequired;
-            PlaceRepeating(endPos, data);
-            AudioSource.PlayClipAtPoint(placementSound, endPos);
-            UpdateMoneyUI();
+            if (EconomyManager.Instance != null)
+            {
+                if (EconomyManager.Instance.CanAfford(totalRequired))
+                {
+                    EconomyManager.Instance.SpendMoney(totalRequired);
+                    PlaceRepeating(endPos, data);
+                    AudioSource.PlayClipAtPoint(placementSound, endPos);
+                }
+            }
+            else
+            {
+                // Fallback for testing without EconomyManager
+                Debug.LogWarning("EconomyManager not present in scene. Bypassing cost.");
+                PlaceRepeating(endPos, data);
+                AudioSource.PlayClipAtPoint(placementSound, endPos);
+            }
         }
     }
 
@@ -128,13 +147,13 @@ public class GridPlacement : MonoBehaviour
         }
     }
 
-    void HandleContextualUI(Ray ray, Vector2 mousePos)
+    void HandleContextualUI(bool show, string text, Vector2 mousePos)
     {
-        if (Physics.Raycast(ray, out RaycastHit hit, 1000f, obstacleLayer))
+        if (show)
         {
             tooltipUI.SetActive(true);
             tooltipUI.transform.position = mousePos + new Vector2(15, 15);
-            tooltipText.text = hit.collider.gameObject.name;
+            tooltipText.text = text;
         }
         else
         {
@@ -142,16 +161,11 @@ public class GridPlacement : MonoBehaviour
         }
     }
 
-    void HandleDeletion(Ray ray)
+    void HandleDeletion(RaycastHit hit)
     {
-        if (Physics.Raycast(ray, out RaycastHit hit, 1000f, obstacleLayer))
-        {
-            AudioSource.PlayClipAtPoint(deletionSound, hit.point);
-            Destroy(hit.collider.gameObject);
-        }
+        AudioSource.PlayClipAtPoint(deletionSound, hit.point);
+        Destroy(hit.collider.gameObject);
     }
-
-    void UpdateMoneyUI() { if (moneyText) moneyText.text = $"Money: ${currentMoney}"; }
 
     void UpdateSinglePreview(Vector3 pos)
     {
