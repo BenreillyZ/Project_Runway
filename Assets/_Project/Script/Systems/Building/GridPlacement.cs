@@ -1,32 +1,30 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
-using TMPro; // 如果使用 TextMeshPro 处理 UI
+using TMPro;
 
 public class GridPlacement : MonoBehaviour
 {
-    [Header("Basic Settings")]
+    [Header("Settings")]
     public float cellSize = 1.0f;
     public LayerMask groundLayer;
     public LayerMask obstacleLayer;
 
-    [Header("Prefabs & Economy")]
-    public GameObject[] buildingPrefabs;
-    public string[] buildingNames = { "Runway", "Terminal" };
-    public int[] buildingCosts = { 500, 2000 };
-    public int currentMoney = 10000; // Starting money
+    [Header("Building Data System")]
+    // Drag your BuildingData assets (Runway, Terminal, etc.) into this array in the Inspector
+    public BuildingData[] availableBuildings; 
     public int selectedIndex = 0;
     
+    [Header("Economy & UI")]
+    public int currentMoney = 10000;
+    public TextMeshProUGUI moneyText;
+    public GameObject tooltipUI;
+    public TextMeshProUGUI tooltipText;
+
     [Header("Visual & Audio Feedback")]
     public GameObject previewPrefab;
-    public GameObject placementEffect; // Particle prefab
-    public GameObject deletionEffect;  // Particle prefab
+    public GameObject placementEffect;
     public AudioClip placementSound;
     public AudioClip deletionSound;
-    
-    [Header("UI References")]
-    public TextMeshProUGUI moneyText;   // Link to your Money UI
-    public GameObject tooltipUI;       // A simple panel/text following mouse
-    public TextMeshProUGUI tooltipText;
 
     private GameObject _previewInstance;
     private MeshRenderer _previewRenderer;
@@ -50,7 +48,7 @@ public class GridPlacement : MonoBehaviour
         Ray ray = Camera.main.ScreenPointToRay(mousePos);
         RaycastHit hit;
 
-        // 1. Tooltip & Deletion Logic
+        // 1. Tooltip and Deletion logic
         HandleContextualUI(ray, mousePos);
 
         if (Mouse.current.rightButton.wasPressedThisFrame)
@@ -77,45 +75,35 @@ public class GridPlacement : MonoBehaviour
             }
         }
 
-        // Toggle building type
-        if (Keyboard.current.digit1Key.wasPressedThisFrame) selectedIndex = 0;
-        if (Keyboard.current.digit2Key.wasPressedThisFrame) selectedIndex = 1;
-    }
-
-    void HandleContextualUI(Ray ray, Vector2 mousePos)
-    {
-        if (Physics.Raycast(ray, out RaycastHit hit, 1000f, obstacleLayer))
+        // Quick toggle building types with keys 1, 2, 3...
+        for (int i = 0; i < availableBuildings.Length; i++)
         {
-            tooltipUI.SetActive(true);
-            tooltipUI.transform.position = mousePos + new Vector2(15, 15);
-            tooltipText.text = hit.collider.gameObject.name.Replace("(Clone)", "");
-        }
-        else
-        {
-            tooltipUI.SetActive(false);
+            if (Keyboard.current.GetChildControl<KeyControl>((i + 1).ToString()).wasPressedThisFrame)
+            {
+                selectedIndex = i;
+            }
         }
     }
 
     void TryPlaceBuildings(Vector3 endPos)
     {
+        if (availableBuildings.Length == 0) return;
+        
+        BuildingData data = availableBuildings[selectedIndex];
         int countX = Mathf.Abs(Mathf.RoundToInt((endPos.x - _dragStartPosition.x) / cellSize)) + 1;
         int countZ = Mathf.Abs(Mathf.RoundToInt((endPos.z - _dragStartPosition.z) / cellSize)) + 1;
-        int totalRequired = countX * countZ * buildingCosts[selectedIndex];
+        int totalRequired = countX * countZ * data.cost;
 
         if (currentMoney >= totalRequired && _isPlacementLegal)
         {
             currentMoney -= totalRequired;
-            PlaceRepeating(endPos);
+            PlaceRepeating(endPos, data);
             AudioSource.PlayClipAtPoint(placementSound, endPos);
             UpdateMoneyUI();
         }
-        else if (currentMoney < totalRequired)
-        {
-            Debug.Log("Not enough money!");
-        }
     }
 
-    void PlaceRepeating(Vector3 end)
+    void PlaceRepeating(Vector3 end, BuildingData data)
     {
         Vector3 start = _dragStartPosition;
         int countX = Mathf.Abs(Mathf.RoundToInt((end.x - start.x) / cellSize));
@@ -130,8 +118,9 @@ public class GridPlacement : MonoBehaviour
                 Vector3 spawnPos = start + new Vector3(i * cellSize * dirX, 0, j * cellSize * dirZ);
                 if (!Physics.CheckSphere(spawnPos, cellSize * 0.3f, obstacleLayer))
                 {
-                    GameObject go = Instantiate(buildingPrefabs[selectedIndex], spawnPos, Quaternion.identity);
-                    go.name = buildingNames[selectedIndex];
+                    // Use the prefab defined in the BuildingData ScriptableObject
+                    GameObject go = Instantiate(data.prefab, spawnPos, Quaternion.identity);
+                    go.name = data.buildingName; 
                     go.layer = (int)Mathf.Log(obstacleLayer.value, 2);
                     if (placementEffect) Instantiate(placementEffect, spawnPos, Quaternion.identity);
                 }
@@ -139,15 +128,26 @@ public class GridPlacement : MonoBehaviour
         }
     }
 
+    void HandleContextualUI(Ray ray, Vector2 mousePos)
+    {
+        if (Physics.Raycast(ray, out RaycastHit hit, 1000f, obstacleLayer))
+        {
+            tooltipUI.SetActive(true);
+            tooltipUI.transform.position = mousePos + new Vector2(15, 15);
+            tooltipText.text = hit.collider.gameObject.name;
+        }
+        else
+        {
+            tooltipUI.SetActive(false);
+        }
+    }
+
     void HandleDeletion(Ray ray)
     {
         if (Physics.Raycast(ray, out RaycastHit hit, 1000f, obstacleLayer))
         {
-            if (deletionEffect) Instantiate(deletionEffect, hit.point, Quaternion.identity);
             AudioSource.PlayClipAtPoint(deletionSound, hit.point);
             Destroy(hit.collider.gameObject);
-            // Optional: currentMoney += 100; // Refund logic
-            UpdateMoneyUI();
         }
     }
 
@@ -157,7 +157,7 @@ public class GridPlacement : MonoBehaviour
     {
         _previewInstance.transform.position = pos;
         _previewInstance.transform.localScale = Vector3.one;
-        _isPlacementLegal = !Physics.CheckSphere(pos, cellSize * 0.3f, obstacleLayer) && (currentMoney >= buildingCosts[selectedIndex]);
+        _isPlacementLegal = !Physics.CheckSphere(pos, cellSize * 0.3f, obstacleLayer);
         UpdatePreviewColor();
     }
 
@@ -168,8 +168,7 @@ public class GridPlacement : MonoBehaviour
         _previewInstance.transform.position = center;
         _previewInstance.transform.localScale = scale;
 
-        int count = (Mathf.Abs(Mathf.RoundToInt((currentPos.x - _dragStartPosition.x) / cellSize)) + 1) * (Mathf.Abs(Mathf.RoundToInt((currentPos.z - _dragStartPosition.z) / cellSize)) + 1);
-        _isPlacementLegal = !Physics.CheckBox(center, (scale * 0.95f) / 2f, Quaternion.identity, obstacleLayer) && (currentMoney >= count * buildingCosts[selectedIndex]);
+        _isPlacementLegal = !Physics.CheckBox(center, (scale * 0.95f) / 2f, Quaternion.identity, obstacleLayer);
         UpdatePreviewColor();
     }
 
