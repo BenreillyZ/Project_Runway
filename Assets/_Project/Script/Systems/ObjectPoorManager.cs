@@ -56,11 +56,17 @@ public class ObjectPoolManager : MonoBehaviour
             tagComponent.prefabInstanceId = poolKey;
         }
 
-        // Reset state and activate
         objectToSpawn.transform.SetParent(parent);
         objectToSpawn.transform.position = position;
         objectToSpawn.transform.rotation = rotation;
         objectToSpawn.SetActive(true);
+
+        // Notify poolable components
+        IPoolable[] poolables = objectToSpawn.GetComponentsInChildren<IPoolable>();
+        foreach (var poolable in poolables)
+        {
+            poolable.OnSpawn();
+        }
 
         return objectToSpawn;
     }
@@ -74,6 +80,13 @@ public class ObjectPoolManager : MonoBehaviour
 
         if (tagComponent != null)
         {
+            // Notify poolable components
+            IPoolable[] poolables = objectToReturn.GetComponentsInChildren<IPoolable>();
+            foreach (var poolable in poolables)
+            {
+                poolable.OnDespawn();
+            }
+
             objectToReturn.SetActive(false);
             objectToReturn.transform.SetParent(transform); // Parent it to the manager for tidiness
 
@@ -99,3 +112,13 @@ public class ObjectPoolTag : MonoBehaviour
 {
     public int prefabInstanceId;
 }
+
+/// <summary>
+/// Interface for objects that use the object pool, enabling them to reset state when spawned or returned.
+/// </summary>
+public interface IPoolable
+{
+    void OnSpawn();
+    void OnDespawn();
+}
+
