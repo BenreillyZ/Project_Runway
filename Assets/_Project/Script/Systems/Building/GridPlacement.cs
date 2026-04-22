@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 using TMPro;
+using ProjectUtilities; // Added for the new Vector3Extensions
 
 public class GridPlacement : MonoBehaviour
 {
@@ -14,9 +15,11 @@ public class GridPlacement : MonoBehaviour
     public BuildingData[] availableBuildings; 
     public int selectedIndex = 0;
     
-    [Header("UI")]
-    public GameObject tooltipUI;
-    public TextMeshProUGUI tooltipText;
+    [Header("Input Actions")]
+    public InputAction placeAction;
+    public InputAction deleteAction;
+    public InputAction pointerAction;
+    public InputAction[] selectBuildingActions;
 
     [Header("Visual & Audio Feedback")]
     public GameObject previewPrefab;
@@ -31,6 +34,44 @@ public class GridPlacement : MonoBehaviour
     private bool _isDragging = false;
     private Camera _mainCamera;
 
+    private void Awake()
+    {
+        if (placeAction == null || placeAction.bindings.Count == 0) placeAction = new InputAction("Place", binding: "<Mouse>/leftButton");
+        if (deleteAction == null || deleteAction.bindings.Count == 0) deleteAction = new InputAction("Delete", binding: "<Mouse>/rightButton");
+        if (pointerAction == null || pointerAction.bindings.Count == 0) pointerAction = new InputAction("Pointer", binding: "<Mouse>/position");
+        
+        if (selectBuildingActions == null || selectBuildingActions.Length == 0)
+        {
+            selectBuildingActions = new InputAction[9];
+            for (int i = 0; i < 9; i++)
+            {
+                selectBuildingActions[i] = new InputAction($"Select{i+1}", binding: $"<Keyboard>/{i+1}");
+            }
+        }
+    }
+
+    private void OnEnable()
+    {
+        placeAction.Enable();
+        deleteAction.Enable();
+        pointerAction.Enable();
+        if (selectBuildingActions != null)
+        {
+            foreach (var action in selectBuildingActions) action?.Enable();
+        }
+    }
+
+    private void OnDisable()
+    {
+        placeAction.Disable();
+        deleteAction.Disable();
+        pointerAction.Disable();
+        if (selectBuildingActions != null)
+        {
+            foreach (var action in selectBuildingActions) action?.Disable();
+        }
+    }
+
     void Start()
     {
         _mainCamera = Camera.main;
@@ -43,22 +84,22 @@ public class GridPlacement : MonoBehaviour
 
     void Update()
     {
-        Vector2 mousePos = Mouse.current.position.ReadValue();
+        Vector2 mousePos = pointerAction.ReadValue<Vector2>();
         Ray ray = _mainCamera.ScreenPointToRay(mousePos);
         RaycastHit hit;
 
         // 1. Tooltip and Deletion logic optimized to one raycast
         if (Physics.Raycast(ray, out RaycastHit obstacleHit, 1000f, obstacleLayer))
         {
-            HandleContextualUI(true, obstacleHit.collider.gameObject.name, mousePos);
-            if (Mouse.current.rightButton.wasPressedThisFrame)
+            EventBus.OnTooltipStateChanged?.Invoke(true, obstacleHit.collider.gameObject.name, mousePos);
+            if (deleteAction.WasPressedThisFrame())
             {
                 HandleDeletion(obstacleHit);
             }
         }
         else
         {
-            HandleContextualUI(false, "", mousePos);
+            EventBus.OnTooltipStateChanged?.Invoke(false, "", mousePos);
         }
 
         // 2. Placement Logic
@@ -66,7 +107,7 @@ public class GridPlacement : MonoBehaviour
         {
             Vector3 currentGridPos = SnapToGrid(hit.point);
 
-            if (Mouse.current.leftButton.wasPressedThisFrame)
+            if (placeAction.WasPressedThisFrame())
             {
                 _isDragging = true;
                 _dragStartPosition = currentGridPos;
@@ -75,7 +116,7 @@ public class GridPlacement : MonoBehaviour
             if (_isDragging) UpdateStretchedPreview(currentGridPos);
             else UpdateSinglePreview(currentGridPos);
 
-            if (Mouse.current.leftButton.wasReleasedThisFrame)
+            if (placeAction.WasReleasedThisFrame())
             {
                 TryPlaceBuildings(currentGridPos);
                 ResetDrag();
@@ -85,7 +126,7 @@ public class GridPlacement : MonoBehaviour
         // Quick toggle building types with keys 1, 2, 3...
         for (int i = 0; i < availableBuildings.Length; i++)
         {
-            if (Keyboard.current.GetChildControl<KeyControl>((i + 1).ToString()).wasPressedThisFrame)
+            if (i < selectBuildingActions.Length && selectBuildingActions[i] != null && selectBuildingActions[i].WasPressedThisFrame())
             {
                 selectedIndex = i;
             }
@@ -103,16 +144,15 @@ public class GridPlacement : MonoBehaviour
 
         if (_isPlacementLegal)
         {
-            if (EconomyManager.Instance != null)
+            if (EconomyManager.Instance != null && EconomyManager.Instance.CanAfford(totalRequired))
             {
-                if (EconomyManager.Instance.CanAfford(totalRequired))
-                {
-                    EconomyManager.Instance.SpendMoney(totalRequired);
-                    PlaceRepeating(endPos, data);
-                    AudioSource.PlayClipAtPoint(placementSound, endPos);
-                }
+                // Fire an event to request money deduction instead of directly calling EconomyManager.Instance.SpendMoney
+                EventBus.OnRequestSpendMoney?.Invoke(totalRequired);
+                
+                PlaceRepeating(endPos, data);
+                AudioSource.PlayClipAtPoint(placementSound, endPos);
             }
-            else
+            else if (EconomyManager.Instance == null)
             {
                 // Fallback for testing without EconomyManager
                 Debug.LogWarning("EconomyManager not present in scene. Bypassing cost.");
@@ -137,34 +177,46 @@ public class GridPlacement : MonoBehaviour
                 Vector3 spawnPos = start + new Vector3(i * cellSize * dirX, 0, j * cellSize * dirZ);
                 if (!Physics.CheckSphere(spawnPos, cellSize * 0.3f, obstacleLayer))
                 {
-                    // Use the prefab defined in the BuildingData ScriptableObject
-                    GameObject go = Instantiate(data.prefab, spawnPos, Quaternion.identity);
+                    GameObject go;
+                    if (ObjectPoolManager.Instance != null)
+                    {
+                        go = ObjectPoolManager.Instance.SpawnFromPool(data.prefab, spawnPos, Quaternion.identity);
+                    }
+                    else
+                    {
+                        go = Instantiate(data.prefab, spawnPos, Quaternion.identity);
+                    }
+                    
                     go.name = data.buildingName; 
                     go.layer = (int)Mathf.Log(obstacleLayer.value, 2);
-                    if (placementEffect) Instantiate(placementEffect, spawnPos, Quaternion.identity);
+                    
+                    if (placementEffect) 
+                    {
+                        if (ObjectPoolManager.Instance != null)
+                            ObjectPoolManager.Instance.SpawnFromPool(placementEffect, spawnPos, Quaternion.identity);
+                        else
+                            Instantiate(placementEffect, spawnPos, Quaternion.identity);
+                    }
+
+                    // Fire an event that a building was placed
+                    EventBus.OnBuildingPlaced?.Invoke(spawnPos, data);
                 }
             }
-        }
-    }
-
-    void HandleContextualUI(bool show, string text, Vector2 mousePos)
-    {
-        if (show)
-        {
-            tooltipUI.SetActive(true);
-            tooltipUI.transform.position = mousePos + new Vector2(15, 15);
-            tooltipText.text = text;
-        }
-        else
-        {
-            tooltipUI.SetActive(false);
         }
     }
 
     void HandleDeletion(RaycastHit hit)
     {
         AudioSource.PlayClipAtPoint(deletionSound, hit.point);
-        Destroy(hit.collider.gameObject);
+        Vector3 point = hit.point;
+        
+        if (ObjectPoolManager.Instance != null)
+            ObjectPoolManager.Instance.ReturnToPool(hit.collider.gameObject);
+        else
+            Destroy(hit.collider.gameObject);
+            
+        // Fire an event that a building was deleted
+        EventBus.OnBuildingDeleted?.Invoke(point);
     }
 
     void UpdateSinglePreview(Vector3 pos)
@@ -194,5 +246,5 @@ public class GridPlacement : MonoBehaviour
 
     void ResetDrag() { _isDragging = false; _previewInstance.transform.localScale = Vector3.one; }
 
-    Vector3 SnapToGrid(Vector3 pos) => new Vector3(Mathf.Round(pos.x / cellSize) * cellSize, 0.1f, Mathf.Round(pos.z / cellSize) * cellSize);
+    Vector3 SnapToGrid(Vector3 pos) => pos.SnapToGrid(cellSize, 0.1f);
 }
