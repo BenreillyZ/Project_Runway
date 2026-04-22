@@ -24,6 +24,11 @@ public static class EventBus
     // Parameters: Vector3 position
     public static Action<Vector3> OnBuildingDeleted;
 
+    // --- UI Events ---
+    // Invoked when a tooltip should be shown or hidden.
+    // Parameters: bool bShow, string text, Vector2 position
+    public static Action<bool, string, Vector2> OnTooltipStateChanged;
+
     // Helper method to clear all subscriptions when a scene unloads to prevent memory leaks
     public static void ClearAllSubscriptions()
     {
@@ -31,6 +36,7 @@ public static class EventBus
         OnMoneyChanged = null;
         OnBuildingPlaced = null;
         OnBuildingDeleted = null;
+        OnTooltipStateChanged = null;
         Debug.Log("EventBus: All subscriptions cleared.");
     }
 }
