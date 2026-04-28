@@ -29,6 +29,16 @@ public static class EventBus
     // Parameters: bool bShow, string text, Vector2 position
     public static Action<bool, string, Vector2> OnTooltipStateChanged;
 
+    // --- Audio Events ---
+    // Invoked when a sound effect should be played at a world position.
+    // Parameters: AudioClip clip, Vector3 worldPosition
+    public static Action<AudioClip, Vector3> OnPlaySFX;
+
+    // --- Save / Load Events ---
+    // Invoked when the player requests a save or load operation.
+    public static Action OnSaveRequested;
+    public static Action OnLoadRequested;
+
     // Helper method to clear all subscriptions when a scene unloads to prevent memory leaks
     public static void ClearAllSubscriptions()
     {
@@ -37,6 +47,9 @@ public static class EventBus
         OnBuildingPlaced = null;
         OnBuildingDeleted = null;
         OnTooltipStateChanged = null;
+        OnPlaySFX = null;
+        OnSaveRequested = null;
+        OnLoadRequested = null;
         Debug.Log("EventBus: All subscriptions cleared.");
     }
 }
